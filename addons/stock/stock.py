@@ -560,7 +560,7 @@ stock_tracking()
 #----------------------------------------------------------
 class stock_picking(osv.osv):
     _name = "stock.picking"
-    _inherit = ['mail.thread']
+    _inherit = ['mail.thread', 'res.contact.mixin']
     _description = "Picking List"
     _order = "id desc"
 
@@ -1076,6 +1076,7 @@ class stock_picking(osv.osv):
             'origin': (picking.name or '') + (picking.origin and (':' + picking.origin) or ''),
             'type': inv_type,
             'account_id': account_id,
+            'contact_id': picking.contact_id and picking.contact_id.id,
             'partner_id': partner.id,
             'comment': comment,
             'payment_term': payment_term,

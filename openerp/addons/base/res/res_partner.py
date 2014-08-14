@@ -32,6 +32,8 @@ from openerp.osv import osv, fields, orm
 from openerp.osv.expression import get_unaccent_wrapper
 from openerp.tools.translate import _
 from openerp.tools.yaml_import import is_comment
+from openerp.osv.orm import setup_modifiers
+from lxml import etree
 
 class format_address(object):
     def fields_view_get_address(self, cr, uid, arch, context={}):
@@ -166,9 +168,142 @@ def _lang_get(self, cr, uid, context=None):
 ADDRESS_FIELDS = ('street', 'street2', 'zip', 'city', 'state_id', 'country_id')
 POSTAL_ADDRESS_FIELDS = ADDRESS_FIELDS # deprecated, to remove after 7.0
 
+class contact_mixin_methods(osv.AbstractModel):
+    _name = 'res.contact.mixin.methods'
+    _force_visible_partner = False
+    _contact_field = False
+
+    def create(self, cr, uid, vals, context=None):
+        vals = self.write_contact(cr, uid, [], vals, context)
+        return super(contact_mixin_methods, self).create(cr, uid, vals, context)
+
+    def read(self, cr, user, ids, fields=None, context=None,
+                           load='_classic_read'):
+        res = super(contact_mixin_methods, self).read(cr, user, ids, fields, context,
+                                              load)
+        if fields and 'contact_id' in fields:
+            if isinstance(res, list):
+                for rec in res:
+                    if not rec.get('contact_id') and rec.get('partner_id'):
+                        rec['contact_id'] = rec['partner_id']
+            else:
+                if not res.get('contact_id') and res.get('partner_id'):
+                    res['contact_id'] = res['partner_id']
+        return res
+
+    def write(self, cr, uid, ids, vals, context=None):
+        vals = self.write_contact(cr, uid, ids, vals, context)
+        return super(contact_mixin_methods, self).write(cr, uid, ids, vals, context)
+
+    def write_contact(self, cr, uid, ids, vals, context=None):
+        partner_obj = self.pool.get('res.partner')
+        if isinstance(vals.get('partner_id'), (list, tuple)):
+            partner_id = vals.get('partner_id')[0]
+        else:
+            partner_id = vals.get('partner_id')
+        if partner_id:
+            if not vals.get('contact_id'):
+                vals['contact_id'] = partner_id
+            vals['partner_id'] = partner_obj.read(cr, uid, [partner_id],
+                                                  ['commercial_partner_id']
+                                                  )[0]['commercial_partner_id'][0]
+        return vals
+
+    def onchange_contact_mixin(self, cr, uid, ids, contact_id, partner_id,
+                               context=None):
+        res = {}
+        if contact_id:
+            commercial_partner_id = self.pool.get('res.partner').read(cr, uid,
+            [contact_id], ['commercial_partner_id'])[0]['commercial_partner_id']
+            res = {'value': {'partner_id': commercial_partner_id}}
+        return res
+
+    def fields_view_get(self, cr, uid, view_id=None, view_type='form',
+                                      context=None, toolbar=False,
+                                      submenu=False):
+        res = super(contact_mixin_methods, self).fields_view_get(cr, uid, view_id,
+                                                         view_type,
+                                                         context,
+                                                         toolbar,
+                                                         submenu)
+        if view_type in ('form', 'tree', 'search'):
+            eview = etree.fromstring(res['arch'])
+            partner_fields = eview.xpath("//field[@name='partner_id']")
+            partner_descr = self.fields_get(cr, uid, ['partner_id'], context)
+            contact_descr = self.fields_get(cr, uid, ['contact_id'], context)
+            for partner in partner_fields:
+                kw = {
+                    'name': 'contact_id',
+                    'options': "{'always_reload': True}",
+                    'context': partner.attrib.get('context', ''),
+                    'domain': partner.attrib.get('domain', ''),
+                    'modifiers': partner.attrib.get('modifiers', ''),
+                }
+                if view_type in ('form', 'tree'):
+                    kw['on_change'] = \
+                    "onchange_contact_mixin(contact_id, partner_id, context)"
+                    kw['groups'] = "base.group_contact_advanced"
+                    if (self._force_visible_partner or
+                        self.user_has_groups(cr, uid, "base.group_contact_advanced", context)
+                        and not self._contact_field):
+                        kw['modifiers'] = kw['modifiers'].replace('"required": true', '"required": false')
+                        kw['context'] = kw['context'].replace("'show_address': 1", "'show_address': 0")
+                    else:
+                        partner.set('invisible', '1')
+                        setup_modifiers(partner, partner_descr, context, view_type == 'tree')
+                        kw['string'] = partner.attrib.get('string', partner_descr['partner_id']['string'])
+                contact = etree.Element('field', **kw)
+                p_index = partner.getparent().index(partner)
+                partner.getparent().insert(p_index, contact)
+                res['fields'].update(contact_descr)
+            if view_type == 'search':
+                group_by_fields = eview.xpath("//filter[@context=\"{'group_by':'partner_id'}\"]")
+                for group_by_field in group_by_fields:
+                    kw = {
+                        'string': 'Contact',
+                        'icon': "terp-partner",
+                        'context': "{'group_by':'contact_id'}",
+                        'domain': "[]",
+                    }
+                    g_contact = etree.Element('filter', **kw)
+                    g_index = group_by_field.getparent().index(group_by_field)
+                    group_by_field.getparent().insert(g_index, g_contact)
+            res['arch'] = etree.tostring(eview, encoding="utf-8")
+        return res
+
+class contact_mixin(osv.AbstractModel):
+    _name = 'res.contact.mixin'
+    _inherit = 'res.contact.mixin.methods'
+    _contact_mixin = True
+    _columns = {
+        'contact_id': fields.many2one('res.partner', 'Contact'),
+    }
+
 class res_partner(osv.osv, format_address):
     _description = 'Partner'
     _name = "res.partner"
+
+    def unlink(self, cr, uid, ids, context=None):
+        errors = {}
+        for model_name, model_obj in self.pool.models.iteritems():
+            if hasattr(model_obj, '_contact_mixin') and model_name != 'res.contact.mixin' and model_obj._auto:
+                domain = [
+                    '|',
+                    ['contact_id', 'in', ids],
+                    ['partner_id', 'in', ids],
+                ]
+                res_ids = model_obj.search(cr, uid, domain, context=context)
+                if res_ids:
+                    res = model_obj.browse(cr, uid, res_ids, context=context)
+                    errors[_(model_obj._description)] = res.pop(0)[model_obj._rec_name] or ""
+                    for obj in res:
+                        errors[_(model_obj._description)] += "; %s"%(obj[model_obj._rec_name] or "")
+        if errors:
+            raise osv.except_osv(_('User Error'),
+                _("Cannot delete contact %s because they are used in the following records:\n"
+                    "%s") % (ids, "\n".join(["%s : %s"%(key, errors[key]) for key in errors])))
+        return super(res_partner, self).unlink(cr, uid, ids, context=context)
+
 
     def _address_display(self, cr, uid, ids, name, args, context=None):
         res = {}
@@ -720,6 +855,8 @@ class res_partner(osv.osv, format_address):
 
         # default to type 'default' or the partner itself
         default = result.get('default', partner.id)
+        if 'invoice' in adr_pref and not result.get('invoice'):
+            result['invoice'] = current_partner.commercial_partner_id.id
         for adr_type in adr_pref:
             result[adr_type] = result.get(adr_type) or default 
         return result

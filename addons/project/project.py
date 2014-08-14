@@ -77,7 +77,7 @@ class project(osv.osv):
     _description = "Project"
     _inherits = {'account.analytic.account': "analytic_account_id",
                  "mail.alias": "alias_id"}
-    _inherit = ['mail.thread', 'ir.needaction_mixin']
+    _inherit = ['mail.thread', 'ir.needaction_mixin', 'res.contact.mixin.methods']
 
     def _auto_init(self, cr, context=None):
         """ Installation hook: aliases, project.project """
