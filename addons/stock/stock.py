@@ -1051,7 +1051,6 @@ class stock_picking(osv.osv):
             'origin': (invoice.origin or '') + ', ' + (picking.name or '') + (picking.origin and (':' + picking.origin) or ''),
             'comment': (comment and (invoice.comment and invoice.comment + "\n" + comment or comment)) or (invoice.comment and invoice.comment or ''),
             'date_invoice': context.get('date_inv', False),
-            'user_id': uid,
         }
 
     def _prepare_invoice(self, cr, uid, picking, partner, inv_type, journal_id, context=None):
@@ -1246,7 +1245,9 @@ class stock_picking(osv.osv):
             context = {}
         for pick in self.browse(cr, uid, ids, context=context):
             if pick.state in ['done','cancel']:
-                raise osv.except_osv(_('Error!'), _('You cannot remove the picking which is in %s state!')%(pick.state,))
+                # retrieve the string value of field in user's language
+                state = dict(self.fields_get(cr, uid, context=context)['state']['selection']).get(pick.state, pick.state)
+                raise osv.except_osv(_('Error!'), _('You cannot remove the picking which is in %s state!')%(state,))
             else:
                 ids2 = [move.id for move in pick.move_lines]
                 ctx = context.copy()
@@ -1347,6 +1348,7 @@ class stock_picking(osv.osv):
                                {'name': sequence_obj.get(cr, uid,
                                             'stock.picking.%s'%(pick.type)),
                                })
+                    pick.refresh()
                     new_picking = self.copy(cr, uid, pick.id,
                             {
                                 'name': new_picking_name,
@@ -1404,9 +1406,8 @@ class stock_picking(osv.osv):
                 self.action_move(cr, uid, [new_picking], context=context)
                 wf_service.trg_validate(uid, 'stock.picking', new_picking, 'button_done', cr)
                 wf_service.trg_write(uid, 'stock.picking', pick.id, cr)
-                delivered_pack_id = pick.id
-                back_order_name = self.browse(cr, uid, delivered_pack_id, context=context).name
-                self.message_post(cr, uid, new_picking, body=_("Back order <em>%s</em> has been <b>created</b>.") % (back_order_name), context=context)
+                delivered_pack_id = new_picking
+                self.message_post(cr, uid, new_picking, body=_("Back order <em>%s</em> has been <b>created</b>.") % (pick.name), context=context)
             else:
                 self.action_move(cr, uid, [pick.id], context=context)
                 wf_service.trg_validate(uid, 'stock.picking', pick.id, 'button_done', cr)
@@ -1528,7 +1529,7 @@ class stock_production_lot(osv.osv):
         'product_id': lambda x, y, z, c: c.get('product_id', False),
     }
     _sql_constraints = [
-        ('name_ref_uniq', 'unique (name, ref)', 'The combination of Serial Number and internal reference must be unique !'),
+        ('name_ref_uniq', 'unique (name, ref, product_id, company_id)', 'The combination of Serial Number, internal reference, Product and Company must be unique !'),
     ]
     def action_traceability(self, cr, uid, ids, context=None):
         """ It traces the information of a product
@@ -1981,14 +1982,13 @@ class stock_move(osv.osv):
         product = self.pool.get('product.product').browse(cr, uid, [prod_id], context=ctx)[0]
         uos_id  = product.uos_id and product.uos_id.id or False
         result = {
+            'name': product.partner_ref,
             'product_uom': product.uom_id.id,
             'product_uos': uos_id,
             'product_qty': 1.00,
             'product_uos_qty' : self.pool.get('stock.move').onchange_quantity(cr, uid, ids, prod_id, 1.00, product.uom_id.id, uos_id)['value']['product_uos_qty'],
             'prodlot_id' : False,
         }
-        if not ids:
-            result['name'] = product.partner_ref
         if loc_id:
             result['location_id'] = loc_id
         if loc_dest_id:
@@ -2236,7 +2236,11 @@ class stock_move(osv.osv):
                     pickings[move.picking_id.id] = 1
                     r = res.pop(0)
                     product_uos_qty = self.pool.get('stock.move').onchange_quantity(cr, uid, [move.id], move.product_id.id, r[0], move.product_id.uom_id.id, move.product_id.uos_id.id)['value']['product_uos_qty']
-                    cr.execute('update stock_move set location_id=%s, product_qty=%s, product_uos_qty=%s where id=%s', (r[1], r[0],product_uos_qty, move.id))
+                    move.write({
+                        'location_id': r[1],
+                        'product_qty': r[0],
+                        'product_uos_qty': product_uos_qty,
+                        })
 
                     while res:
                         r = res.pop(0)
@@ -2435,7 +2439,6 @@ class stock_move(osv.osv):
                 todo.append(move.id)
         if todo:
             self.action_confirm(cr, uid, todo, context=context)
-            todo = []
 
         for move in self.browse(cr, uid, ids, context=context):
             if move.state in ['done','cancel']:
@@ -2459,15 +2462,11 @@ class stock_move(osv.osv):
 
             self._create_product_valuation_moves(cr, uid, move, context=context)
             if move.state not in ('confirmed','done','assigned'):
-                todo.append(move.id)
-
-        if todo:
-            self.action_confirm(cr, uid, todo, context=context)
-
-        self.write(cr, uid, move_ids, {'state': 'done', 'date': time.strftime(DEFAULT_SERVER_DATETIME_FORMAT)}, context=context)
-        for id in move_ids:
-             wf_service.trg_trigger(uid, 'stock.move', id, cr)
-
+                self.action_confirm(cr, uid, [move.id], context=context)
+            self.write(cr, uid, [move.id], 
+                       {'state': 'done', 
+                       'date': time.strftime(DEFAULT_SERVER_DATETIME_FORMAT)}, 
+                       context=context)
         for pick_id in picking_ids:
             wf_service.trg_write(uid, 'stock.picking', pick_id, cr)
 
