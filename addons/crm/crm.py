@@ -193,15 +193,19 @@ class crm_case_categ(osv.osv):
         'name': fields.char('Name', size=64, required=True, translate=True),
         'section_id': fields.many2one('crm.case.section', 'Sales Team'),
         'object_id': fields.many2one('ir.model', 'Object Name'),
+	'active': fields.boolean('Active'),
     }
+
     def _find_object_id(self, cr, uid, context=None):
         """Finds id for case object"""
         context = context or {}
         object_id = context.get('object_id', False)
         ids = self.pool.get('ir.model').search(cr, uid, ['|',('id', '=', object_id),('model', '=', context.get('object_name', False))])
         return ids and ids[0] or False
+
     _defaults = {
-        'object_id' : _find_object_id
+        'object_id' : _find_object_id,
+	'active': lambda *a: 1,
     }
 
 class crm_case_resource_type(osv.osv):

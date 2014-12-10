@@ -235,6 +235,7 @@
                         <field name="name"/>
                         <field name="section_id"/>
                         <field name="object_id" invisible="1"/>
+                        <field name="active"/>
                     </group>
                 </form>
             </field>
