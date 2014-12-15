@@ -1373,7 +1373,9 @@ class stock_picking(osv.osv):
                         {
                             'product_qty': move.product_qty - partial_qty[move.id],
                             'product_uos_qty': move.product_uos_qty - uos_qty[move.id],
-                            'prodlot_id': False,
+                            # TODO FIXME on next version we should find a clean
+                            # way to keep the prodlot id
+                            #'prodlot_id': False,
                             'tracking_id': False,
                         })
 
@@ -2811,7 +2813,9 @@ class stock_move(osv.osv):
                     {
                         'product_qty': move.product_qty - product_qty,
                         'product_uos_qty': move.product_qty - product_qty,
-                        'prodlot_id': False,
+                        # TODO FIXME on next version we should find a clean
+                        # way to keep the prodlot id
+                        #'prodlot_id': False,
                         'tracking_id': False,
                     })
 
