@@ -329,7 +329,7 @@ class ir_fields_converter(orm.Model):
         elif subfield is None:
             field_type = _(u"name")
             ids = RelatedModel.name_search(
-                cr, uid, name=value, operator='=', context=context)
+                cr, uid, value, column._domain, operator='=', context=context)
             if ids:
                 if len(ids) > 1:
                     warnings.append(orm.ImportWarning(
